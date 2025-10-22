@@ -3,7 +3,8 @@
 A simple e-commerce prototype built with React, Node.js, and Docker.
 
 ## Group members
-|up | name |
+|up          | name               |
+|------------|--------------------|
 |up202105337 | Eduardo A. Machado |
 
 ## Features
