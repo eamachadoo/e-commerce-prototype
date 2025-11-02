@@ -166,16 +166,31 @@ function App() {
           <div className="products-grid">
             {items.map(item => (
               <div key={item.id} className="product-card">
-                <h3>{item.name}</h3>
-                <p className="price">{formatPrice(item.price)}</p>
-                <p className="stock">Stock: {item.stock}</p>
-                <button 
-                  onClick={() => addToCart(item.id)} 
-                  disabled={loading || item.stock === 0}
-                  className="add-to-cart-btn"
-                >
-                  {item.stock === 0 ? 'Out of Stock' : 'Add to Cart'}
-                </button>
+                {item.image && (
+                  <div className="product-image">
+                    <img src={item.image} alt={item.name} />
+                  </div>
+                )}
+                <div className="product-info">
+                  <h3>{item.name}</h3>
+                  {item.category && (
+                    <span className="category-badge">{item.category}</span>
+                  )}
+                  <p className="price">{formatPrice(item.price)}</p>
+                  <p className="stock">Stock: {item.stock === 999 ? 'In Stock' : item.stock}</p>
+                  {item.description && (
+                    <div className="product-description">
+                      <p>{item.description.replace(/<[^>]*>/g, '').substring(0, 120)}...</p>
+                    </div>
+                  )}
+                  <button 
+                    onClick={() => addToCart(item.id)} 
+                    disabled={loading || item.stock === 0}
+                    className="add-to-cart-btn"
+                  >
+                    {item.stock === 0 ? 'Out of Stock' : 'Add to Cart'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
