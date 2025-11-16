@@ -17,7 +17,16 @@ async function ensureTopic(name) {
   const [exists] = await topic.exists();
   if (!exists) {
     console.log(`Creating topic: ${name}`);
-    await pubsub.createTopic(name);
+    try {
+      await pubsub.createTopic(name);
+    } catch (err) {
+      // ALREADY_EXISTS can happen in race conditions; treat as success
+      if (err && (err.code === 6 || /already exists/i.test(err.message || err.details || ''))) {
+        console.log(`Topic already exists (race): ${name}`);
+      } else {
+        throw err;
+      }
+    }
   } else {
     console.log(`Topic exists: ${name}`);
   }
@@ -28,8 +37,17 @@ async function ensureSubscription(topicName, subName) {
   const [exists] = await subscription.exists();
   if (!exists) {
     console.log(`Creating subscription: ${subName} -> ${topicName}`);
-    const topic = pubsub.topic(topicName);
-    await topic.createSubscription(subName);
+    try {
+      const topic = pubsub.topic(topicName);
+      await topic.createSubscription(subName);
+    } catch (err) {
+      // Ignore ALREADY_EXISTS errors (idempotent init)
+      if (err && (err.code === 6 || /already exists/i.test(err.message || err.details || ''))) {
+        console.log(`Subscription already exists (race): ${subName}`);
+      } else {
+        throw err;
+      }
+    }
   } else {
     console.log(`Subscription exists: ${subName}`);
   }

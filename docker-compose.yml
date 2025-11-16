@@ -40,3 +40,48 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  orders-subscriber:
+    build: ./backend
+    container_name: orders_subscriber
+    command: sh -c "npm run start-subscriber"
+    environment:
+      - PUBSUB_PROJECT=test-project
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+    volumes:
+      - ./backend:/usr/src/app
+      - backend_node_modules:/usr/src/app/node_modules
+    depends_on:
+      - pubsub-emulator
+    restart: on-failure
+
+  notifications-subscriber:
+    build: ./backend
+    container_name: notifications_subscriber
+    command: sh -c "npm run start-notifications-subscriber"
+    environment:
+      - PUBSUB_PROJECT=test-project
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+    volumes:
+      - ./backend:/usr/src/app
+      - backend_node_modules:/usr/src/app/node_modules
+    depends_on:
+      - pubsub-emulator
+    restart: on-failure
+
+  inventory-subscriber:
+    build: ./backend
+    container_name: inventory_subscriber
+    command: sh -c "npm run start-inventory-subscriber"
+    environment:
+      - PUBSUB_PROJECT=test-project
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+    volumes:
+      - ./backend:/usr/src/app
+      - backend_node_modules:/usr/src/app/node_modules
+    depends_on:
+      - pubsub-emulator
+    restart: on-failure
+
+volumes:
+  backend_node_modules:
