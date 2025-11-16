@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const { db, initDb } = require('./db');
 const productService = require('./productService');
+const { publish } = require('./events/pubsubPublisher');
+const { startOrdersSubscriber } = require('./subscribers/ordersSubscriber');
 
 const app = express();
 app.use(cors());
@@ -237,6 +239,7 @@ app.post('/api/checkout', async (req, res) => {
           id: cartItem.item_id,
           quantity: cartItem.quantity,
           name: product ? product.name : 'Unknown Product',
+          price: product ? product.price : 0,
           stock: product ? product.stock : 0
         };
       });
@@ -255,8 +258,25 @@ app.post('/api/checkout', async (req, res) => {
       }
 
       // For demo purposes, just clear the cart (since we can't actually update Jumpseller stock)
-      db.run('DELETE FROM cart_items', dErr => {
+      db.run('DELETE FROM cart_items', async dErr => {
         if (dErr) return res.status(500).json({ error: 'DB error clearing cart' });
+
+        // Publish an order.created event (best-effort: don't block response on failures)
+        (async () => {
+          try {
+            const subtotal = cartWithProducts.reduce((s, p) => s + (p.quantity * (p.price || 0)), 0);
+            const orderEvent = {
+              orderId: Date.now(),
+              items: cartWithProducts.map(p => ({ id: p.id, quantity: p.quantity })),
+              total: subtotal
+            };
+            await publish('orders', orderEvent);
+            console.log('Published order.created event');
+          } catch (err) {
+            console.error('Failed to publish order event:', err);
+          }
+        })();
+
         return res.json({ success: true, message: 'Order confirmed' });
       });
     });
@@ -271,3 +291,12 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`Backend listening on ${PORT}`);
 });
+
+// Optionally start an in-process subscriber for dev/testing
+if (process.env.START_SUBSCRIBER === 'true') {
+  try {
+    startOrdersSubscriber();
+  } catch (err) {
+    console.error('Failed to start in-process orders subscriber:', err);
+  }
+}
