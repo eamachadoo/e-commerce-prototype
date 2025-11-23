@@ -3,8 +3,6 @@ const express = require('express');
 const cors = require('cors');
 const { db, initDb } = require('./db');
 const productService = require('./productService');
-const { publish } = require('./events/pubsubPublisher');
-const { startOrdersSubscriber } = require('./subscribers/ordersSubscriber');
 
 const app = express();
 app.use(cors());
@@ -239,7 +237,6 @@ app.post('/api/checkout', async (req, res) => {
           id: cartItem.item_id,
           quantity: cartItem.quantity,
           name: product ? product.name : 'Unknown Product',
-          price: product ? product.price : 0,
           stock: product ? product.stock : 0
         };
       });
@@ -254,61 +251,12 @@ app.post('/api/checkout', async (req, res) => {
       }));
       
       if (problems.length > 0) {
-        // Best-effort: publish an order.failed event so other services can react
-        (async () => {
-          try {
-            const failedEvent = {
-              event: 'order.failed',
-              reason: 'stock_issues',
-              details: problems,
-              cart: cartWithProducts,
-              timestamp: Date.now()
-            };
-            await publish('orders', failedEvent);
-            console.log('Published order.failed event');
-          } catch (err) {
-            console.error('Failed to publish order.failed event:', err);
-          }
-        })();
-
         return res.status(409).json({ error: 'Stock issues', details: problems });
       }
 
       // For demo purposes, just clear the cart (since we can't actually update Jumpseller stock)
-      db.run('DELETE FROM cart_items', async dErr => {
+      db.run('DELETE FROM cart_items', dErr => {
         if (dErr) return res.status(500).json({ error: 'DB error clearing cart' });
-
-        // Publish an order.created event (best-effort: don't block response on failures)
-        (async () => {
-          try {
-            const subtotal = cartWithProducts.reduce((s, p) => s + (p.quantity * (p.price || 0)), 0);
-            const orderEvent = {
-              event: 'order.created',
-              orderId: Date.now(),
-              items: cartWithProducts.map(p => ({ id: p.id, quantity: p.quantity })),
-              total: subtotal,
-              timestamp: Date.now()
-            };
-            await publish('orders', orderEvent);
-            console.log('Published order.created event');
-
-            // Also publish a stock.updated notification so inventory/notification services can react
-            try {
-              const stockEvent = {
-                event: 'stock.updated',
-                items: cartWithProducts.map(p => ({ id: p.id, quantity: p.quantity })),
-                timestamp: Date.now()
-              };
-              await publish('notifications', stockEvent);
-              console.log('Published stock.updated notification');
-            } catch (err2) {
-              console.error('Failed to publish stock.updated notification:', err2);
-            }
-          } catch (err) {
-            console.error('Failed to publish order event:', err);
-          }
-        })();
-
         return res.json({ success: true, message: 'Order confirmed' });
       });
     });
@@ -323,12 +271,3 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`Backend listening on ${PORT}`);
 });
-
-// Optionally start an in-process subscriber for dev/testing
-if (process.env.START_SUBSCRIBER === 'true') {
-  try {
-    startOrdersSubscriber();
-  } catch (err) {
-    console.error('Failed to start in-process orders subscriber:', err);
-  }
-}

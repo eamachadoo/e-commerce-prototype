@@ -6,11 +6,6 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "start-subscriber": "node subscribers/runOrdersSubscriber.js",
-    "start-notifications-subscriber": "node subscribers/runNotificationsSubscriber.js",
-    "start-inventory-subscriber": "node subscribers/runInventorySubscriber.js",
-    "init-pubsub": "node scripts/initPubsub.js",
-    "publish-test": "node scripts/publishTest.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -18,7 +13,6 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@google-cloud/pubsub": "^5.2.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
