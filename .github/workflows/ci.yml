@@ -6,6 +6,20 @@ on:
     branches: [ main ]
 
 jobs:
+  lint:
+    name: Lint (report-only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps (backend)
+        run: npm ci --prefix backend
+      - name: Prettier check (report-only)
+        run: npx prettier --check . || true
+      - name: Run ESLint (backend) (report-only)
+        working-directory: backend
+        run: npx eslint . --ext .js,.ts,.tsx || true
+
   build:
     runs-on: ubuntu-latest
     steps:
