@@ -9,7 +9,7 @@ services:
       # Maps your computer's port 5000 to the container's port 5000
       - "4000:4000"
     env_file:
-      - ./backend/.env  # <-- ADD THIS LINE
+      - ./backend/.env
     environment:
       # You can add database URLs or other secrets here
       - NODE_ENV=production
