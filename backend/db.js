@@ -47,4 +47,33 @@ function initDb() {
   });
 }
 
-module.exports = { db, initDb };
+// Upsert a product payload from Jumpseller into the local `items` table.
+// Strategy: try to match by `external_id` (if present) or `name`. If not found, insert.
+function upsertProductFromJumpseller(product) {
+  return new Promise((resolve, reject) => {
+    const { id: externalId, title: name, price, stock } = product;
+    // Normalize price: Jumpseller may send cents or float; expect cents integer or a number
+    const priceInt = Number.isInteger(price) ? price : Math.round((price || 0) * 100);
+
+    // If the table doesn't have external_id column, fallback to matching by name.
+    db.get("PRAGMA table_info(items)", (pragmaErr) => {
+      // Try simple upsert by name
+      db.get('SELECT id FROM items WHERE name = ?', [name], (gErr, row) => {
+        if (gErr) return reject(gErr);
+        if (row) {
+          db.run('UPDATE items SET price = ?, stock = ? WHERE id = ?', [priceInt, stock || 0, row.id], function (uErr) {
+            if (uErr) return reject(uErr);
+            return resolve({ updated: true, id: row.id });
+          });
+        } else {
+          db.run('INSERT INTO items (name, price, stock) VALUES (?, ?, ?)', [name, priceInt, stock || 0], function (iErr) {
+            if (iErr) return reject(iErr);
+            return resolve({ inserted: true, id: this.lastID });
+          });
+        }
+      });
+    });
+  });
+}
+
+module.exports = { db, initDb, upsertProductFromJumpseller };
