@@ -14,6 +14,7 @@
     "proto:build": "mkdir -p src/gen && npx -p protobufjs pbjs -t static-module -w commonjs -o src/gen/shopping_cart.js ../proto/*.proto && npx -p protobufjs pbts -o src/gen/shopping_cart.d.ts src/gen/shopping_cart.js",
     "proto:check": "node scripts/check_proto_generated.js",
     "proto:clean": "rimraf src/gen",
+    "migrate": "node scripts/run_migrations.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

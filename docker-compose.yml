@@ -102,6 +102,8 @@ services:
     ports:
       - "3001:3001"
     volumes:
+        depends_on:
+          - db
       - ./MIPS-Frontend-main/mips_product_page:/app
       - /app/node_modules
 
@@ -119,3 +121,4 @@ services:
 
 volumes:
   backend_node_modules:
+  postgres_data:
