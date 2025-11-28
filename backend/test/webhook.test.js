@@ -4,9 +4,12 @@ const assert = require('assert');
 const sqlite3 = require('sqlite3').verbose();
 const request = require('supertest');
 
-// Ensure a clean DB for the test
+// Ensure a clean DB for the test (only once across loaded test files)
 const DB_PATH = path.join(__dirname, '..', 'store.db');
-try { fs.unlinkSync(DB_PATH); } catch (e) { /* ignore */ }
+if (!global.__dbCleaned) {
+  try { fs.unlinkSync(DB_PATH); } catch (e) { /* ignore */ }
+  global.__dbCleaned = true;
+}
 
 // Require publisher and stub it to capture calls
 const pubsub = require('../events/pubsubPublisher');
@@ -17,11 +20,15 @@ pubsub.publish = async (topic, payload) => {
   return 'test-id';
 };
 
-// Start the app (requires will initialize DB)
-const app = require('../index');
+// Start the app in before() to avoid top-level side-effects
+let app;
 
 describe('Jumpseller webhook integration', function () {
   this.timeout(5000);
+
+  before(() => {
+    app = require('../index');
+  });
 
   it('accepts product webhook, upserts DB and publishes event', async () => {
     const product = { id: 12345, title: 'Test Product', price: 1999, stock: 7 };

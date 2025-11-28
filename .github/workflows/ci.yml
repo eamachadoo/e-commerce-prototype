@@ -1,3 +1,53 @@
+name: CI (migrations + tests)
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  test-and-migrate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: devuser
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: cartdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U devuser -d cartdb" \
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Wait for Postgres
+        run: |
+          echo "Waiting for Postgres to be ready..."
+          for i in {1..30}; do
+            pg_isready -h localhost -p 5432 -U devuser && break || sleep 1
+          done
+
+      - name: Install backend dependencies
+        run: npm ci --prefix backend
+
+      - name: Run backend migrations
+        env:
+          DATABASE_URL: postgresql://devuser:devpass@localhost:5432/cartdb
+        run: npm --prefix backend run migrate
+
+      - name: Run backend tests
+        run: npm --prefix backend test --silent
 name: CI
 on:
   push:

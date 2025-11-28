@@ -5,26 +5,31 @@ const assert = require('assert');
 const sqlite3 = require('sqlite3').verbose();
 const request = require('supertest');
 
-// Ensure clean DB for this test
+// Ensure clean DB for this test (only once across loaded test files)
 const DB_PATH = path.join(__dirname, '..', 'store.db');
-try { fs.unlinkSync(DB_PATH); } catch (e) { /* ignore */ }
+if (!global.__dbCleaned) {
+  try { fs.unlinkSync(DB_PATH); } catch (e) { /* ignore */ }
+  global.__dbCleaned = true;
+}
 
-// Set secret for HMAC validation
-process.env.JUMPSELLER_SECRET = 'test-secret-123';
-
-// Stub publisher to capture calls
-const pubsub = require('../events/pubsubPublisher');
+// Stubs and app will be initialized in before() to avoid top-level side-effects
+let app;
 let published = [];
+const pubsub = require('../events/pubsubPublisher');
 pubsub.publish = async (topic, payload) => {
   published.push({ topic, payload });
   return 'test-id';
 };
 
-const app = require('../index');
-
 describe('Jumpseller webhook HMAC validation', function () {
   this.timeout(5000);
+  const __prev_jumpseller_secret = process.env.JUMPSELLER_SECRET;
 
+  before(() => {
+    process.env.JUMPSELLER_SECRET = 'test-secret-123';
+    // require app after env is set
+    app = require('../index');
+  });
   it('accepts request with valid HMAC signature', async () => {
     const product = { id: 9999, title: 'HMAC Product', price: 500, stock: 2 };
     const payload = JSON.stringify({ product });
@@ -60,5 +65,9 @@ describe('Jumpseller webhook HMAC validation', function () {
       .set('X-Jumpseller-Signature', badSig)
       .send(payload)
       .expect(401);
+  });
+  after(() => {
+    if (typeof __prev_jumpseller_secret === 'undefined') delete process.env.JUMPSELLER_SECRET;
+    else process.env.JUMPSELLER_SECRET = __prev_jumpseller_secret;
   });
 });
