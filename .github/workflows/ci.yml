@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: npm ci --prefix backend
-      - run: npx eslint . --ext .js,.ts,.tsx
+      - run: npx --prefix backend eslint . --ext .js,.ts,.tsx
 
   build:
     runs-on: ubuntu-latest
