@@ -68,3 +68,6 @@ jspm_packages/
 
 # Yarn Integrity file
 .yarn-integrity
+
+# Generated proto artifacts for backend
+backend/src/gen/
