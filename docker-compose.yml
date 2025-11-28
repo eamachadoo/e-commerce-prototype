@@ -102,8 +102,6 @@ services:
     ports:
       - "3001:3001"
     volumes:
-        depends_on:
-          - db
       - ./MIPS-Frontend-main/mips_product_page:/app
       - /app/node_modules
 
