@@ -1,0 +1,41 @@
+syntax = "proto3";
+package priv_msgs.v1;
+
+// Wrapper message that carries event metadata and the cart snapshot
+message ShoppingCartWrapper {
+  enum EventType {
+    UNKNOWN = 0;
+    ITEM_ADDED = 1;
+    ITEM_REMOVED = 2;
+    QTY_CHANGED = 3;
+    CHECKOUT_ATTEMPT = 4;
+    CHECKOUT_SUCCESS = 5;
+    CHECKOUT_FAILED = 6;
+  }
+
+  string event_id = 1;
+  EventType event_type = 2;
+  string publisher_id = 3;
+  string causation_id = 4;
+  string timestamp = 5; // ISO-8601
+
+  ShoppingCart cart = 10;
+}
+
+message ShoppingCart {
+  string cart_id = 1;
+  string user_id = 2;
+  repeated CartItem items = 3;
+  int64 total_price_cents = 4;
+  string currency = 5;
+  string updated_at = 6; // ISO-8601
+}
+
+message CartItem {
+  int64 product_id = 1;
+  string sku = 2;
+  string name = 3;
+  int64 unit_price_cents = 4;
+  int32 quantity = 5;
+  map<string,string> metadata = 6;
+}

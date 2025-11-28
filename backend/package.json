@@ -6,6 +6,14 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "start-subscriber": "node subscribers/runOrdersSubscriber.js",
+    "start-notifications-subscriber": "node subscribers/runNotificationsSubscriber.js",
+    "start-inventory-subscriber": "node subscribers/runInventorySubscriber.js",
+    "init-pubsub": "node scripts/initPubsub.js",
+    "publish-test": "node scripts/publishTest.js",
+    "proto:build": "mkdir -p src/gen && npx -p protobufjs pbjs -t static-module -w commonjs -o src/gen/shopping_cart.js ../proto/*.proto && npx -p protobufjs pbts -o src/gen/shopping_cart.d.ts src/gen/shopping_cart.js",
+    "proto:check": "node scripts/check_proto_generated.js",
+    "proto:clean": "rimraf src/gen",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -20,6 +28,9 @@
     "sqlite3": "^5.1.7"
   },
   "devDependencies": {
-    "nodemon": "^3.1.10"
+    "nodemon": "^3.1.10",
+    "protobufjs": "^7.5.4",
+    "protobufjs-cli": "^1.1.1",
+    "rimraf": "^5.0.10"
   }
 }

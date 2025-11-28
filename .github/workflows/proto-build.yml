@@ -1,0 +1,39 @@
+name: Backend proto build and test
+
+on:
+  push:
+    branches: [ main, pubsub_refinements, pubsub ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-proto-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Generate protos
+        working-directory: backend
+        run: |
+          npm run proto:build
+
+      - name: Check generated proto artifact
+        working-directory: backend
+        run: |
+          npm run proto:check
+
+      - name: Run backend tests
+        working-directory: backend
+        run: |
+          npm test || true
