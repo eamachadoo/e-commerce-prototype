@@ -22,24 +22,34 @@ class ProductService {
             });
 
             if (!response.ok) {
-                throw new Error(`API Error: ${response.status}`);
+                const text = await response.text().catch(() => '');
+                throw new Error(`API Error: ${response.status} ${text}`);
             }
 
             const data = await response.json();
-            
-            // Transform Jumpseller product format to our format
-            return data.map(item => ({
-                id: item.product.id,
-                name: item.product.name,
-                price: Math.round(item.product.price * 100), // Convert EUR to cents
-                stock: item.product.stock_unlimited ? 999 : item.product.stock,
-                description: item.product.description,
-                image: item.product.images.length > 0 ? item.product.images[0].url : null,
-                sku: item.product.sku,
-                category: item.product.categories.length > 0 ? item.product.categories[0].name : null
-            }));
+
+            // Jumpseller may return an array of product objects, or wrappers like { product: { ... } }.
+            // Be resilient to both shapes.
+            return (data || []).map(item => {
+                const p = item && item.product ? item.product : item;
+                const priceFloat = parseFloat(p && p.price) || 0;
+                const priceCents = Math.round(priceFloat * 100);
+                const images = (p && p.images) || [];
+                const categories = (p && p.categories) || [];
+
+                return {
+                    id: p && (p.id || p.id === 0) ? p.id : null,
+                    name: p && (p.name || p.title) ? (p.name || p.title) : 'Unnamed',
+                    price: priceCents,
+                    stock: p && p.stock_unlimited ? 999 : (p && typeof p.stock !== 'undefined' ? p.stock : 0),
+                    description: p && p.description ? p.description : null,
+                    image: images.length > 0 ? (images[0].url || images[0]) : null,
+                    sku: p && p.sku ? p.sku : null,
+                    category: categories.length > 0 ? (categories[0].name || categories[0]) : null
+                };
+            }).filter(r => r && r.id != null);
         } catch (error) {
-            console.error('Error fetching products from Jumpseller:', error);
+            console.error('Error fetching products from Jumpseller:', error && error.message ? error.message : error);
             return null; // Fall back to local database
         }
     }

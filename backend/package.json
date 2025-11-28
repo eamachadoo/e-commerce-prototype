@@ -14,7 +14,9 @@
     "proto:build": "mkdir -p src/gen && npx -p protobufjs pbjs -t static-module -w commonjs -o src/gen/shopping_cart.js ../proto/*.proto && npx -p protobufjs pbts -o src/gen/shopping_cart.d.ts src/gen/shopping_cart.js",
     "proto:check": "node scripts/check_proto_generated.js",
     "proto:clean": "rimraf src/gen",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "migrate": "node scripts/run_migrations.js",
+    "test": "mocha --exit --recursive",
+    "test:webhook": "mocha --exit test/webhook.test.js"
   },
   "keywords": [],
   "author": "",
@@ -25,20 +27,24 @@
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "node-fetch": "^2.7.0",
+    "pg": "^8.16.3",
     "sqlite3": "^5.1.7"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "chai": "^4.3.7",
     "eslint": "^9.39.1",
     "eslint-plugin-react": "^7.37.5",
     "globals": "^16.5.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
+    "mocha": "^10.2.0",
     "nodemon": "^3.1.10",
     "prettier": "^3.7.1",
     "protobufjs": "^7.5.4",
     "protobufjs-cli": "^1.1.1",
     "rimraf": "^5.0.10",
+    "supertest": "^6.3.3",
     "typescript-eslint": "^8.48.0"
   }
 }
