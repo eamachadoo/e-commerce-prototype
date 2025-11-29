@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const { upsertCart, getCart } = require('../db');
 const productService = require('../../productService');
 const pgdb = require('../db');
-const { publish } = require('../../events/pubsubPublisher');
+const { publishShoppingCart } = require('../../events/pubsubPublisher');
 
 // Helper: simple user scoping for demo (single user)
 const DEFAULT_USER = 'user1';
@@ -146,7 +146,7 @@ router.post('/', async (req, res) => {
     const cart = await getCart(finalCartId);
 
     // Publish cart snapshot to PubSub (non-blocking)
-    publishCartSnapshot(cart).catch(err =>
+    publishShoppingCartWrapper(cart).catch(err =>
       console.error('Failed to publish cart event:', err)
     );
 
@@ -159,30 +159,31 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Helper function to publish cart events to PubSub
-async function publishCartSnapshot(cart) {
+// Helper function to publish cart events to PubSub using ShoppingCartWrapper
+async function publishShoppingCartWrapper(cart) {
   try {
-    const event = {
-      event_id: crypto.randomUUID(),
-      event_type: 'CART_UPDATED',
-      timestamp: new Date().toISOString(),
-      cart: {
-        cart_id: cart.cart_id,
-        user_id: cart.user_id,
-        items: cart.items,
-        total_price_cents: cart.total_price_cents,
-        currency: cart.currency
-      }
+    // Format cart data to match ShoppingCartWrapper protobuf schema
+    const wrapper = {
+      cart_id: cart.cart_id,
+      user_id: cart.user_id,
+      items: cart.items.map(item => ({
+        product_id: item.product_id,
+        sku: item.sku || '',
+        name: item.name || '',
+        unit_price_cents: parseInt(item.unit_price_cents) || 0,
+        quantity: item.quantity || 0
+      })),
+      total_price_cents: parseInt(cart.total_price_cents) || 0,
+      currency: cart.currency || 'EUR',
+      updated_at: cart.updated_at || new Date().toISOString()
     };
 
-    const topicName = process.env.PUBSUB_TOPIC_CART || 'cart-events';
-    const messageId = await publish(topicName, event);
-
-    console.log(`[cart] Published snapshot to ${topicName}: ${messageId}`);
+    const messageId = await publishShoppingCart(wrapper);
+    console.log(`[cart] Published ShoppingCartWrapper: ${messageId}`);
     return messageId;
 
   } catch (error) {
-    console.error('[cart] Failed to publish snapshot:', error);
+    console.error('[cart] Failed to publish ShoppingCartWrapper:', error);
     throw error;
   }
 }
