@@ -1,7 +1,7 @@
 let pubsubClient = null;
 let usingRealPubsub = false;
-
 let proto = null;
+
 try {
   // Load generated protobuf classes
   proto = require('../gen/shopping_cart.js');
@@ -17,6 +17,11 @@ try {
 
   usingRealPubsub = true;
 } catch (e) {
+  console.error("Error in PUB/SUB:", e.message);
+  if (e.code === 'MODULE_NOT_FOUND') {
+    console.error("Tip: Check if you ran 'npm install @google-cloud/pubsub'.");
+  }
+  
   // @google-cloud/pubsub not installed — fall back to a no-op publisher that logs messages.
   // This keeps local tests lightweight when the dependency isn't present.
   console.warn('Warning: @google-cloud/pubsub not available, falling back to console publisher.');
