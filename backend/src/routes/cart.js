@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-
+const { upsertCart, getCart } = require('../db');
 const productService = require('../../productService');
 const pgdb = require('../db');
+const { publish } = require('../../events/pubsubPublisher');
 
 // Helper: simple user scoping for demo (single user)
 const DEFAULT_USER = 'user1';
@@ -80,69 +81,111 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST /api/cart -> add item
-router.post('/', async (req, res) => {
-  const { itemId, quantity } = req.body;
-  if (!itemId || !Number.isInteger(quantity) || quantity < 1) return res.status(400).json({ error: 'Invalid payload. Provide itemId and quantity >= 1.' });
+// GET /api/cart/:cart_id -> get specific cart by ID
+router.get('/:cart_id', async (req, res) => {
+  const { cart_id } = req.params;
 
   try {
-    let products;
-    try { products = await productService.getProducts(); } catch (e) { products = null; }
-    if (!products) return res.status(503).json({ error: 'Product service unavailable', actionable: 'Try again later' });
-    const product = products.find(p => String(p.id) === String(itemId));
-    if (!product) return res.status(404).json({ error: 'Item not found' });
-    if (quantity > product.stock) return res.status(409).json({ error: 'Insufficient stock', actionable: `Only ${product.stock} left in stock` });
+    const cart = await getCart(cart_id);
 
-    if (pgdb && pgdb.pool) {
-      // get or create cart
-      const userId = DEFAULT_USER;
-      let cart = await pgdb.query('SELECT id FROM carts WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1', [userId]);
-      let cartId;
-      if (!cart.rows || cart.rows.length === 0) {
-        cartId = crypto.randomUUID();
-        await pgdb.query('INSERT INTO carts (id, user_id, total_price_cents, currency, updated_at) VALUES ($1,$2,$3,$4,now())', [cartId, userId, 0, 'EUR']);
-      } else {
-        cartId = cart.rows[0].id;
-      }
-
-      // check existing item
-      const existing = await pgdb.query('SELECT id, quantity FROM cart_items WHERE cart_id = $1 AND product_id = $2', [cartId, String(itemId)]);
-      if (existing.rows && existing.rows.length > 0) {
-        const newQty = existing.rows[0].quantity + quantity;
-        if (newQty > product.stock) return res.status(409).json({ error: 'Insufficient stock for requested total quantity', actionable: `Max available: ${product.stock}` });
-        await pgdb.query('UPDATE cart_items SET quantity = $1 WHERE id = $2', [newQty, existing.rows[0].id]);
-        return res.json({ success: true });
-      }
-
-      const itemIdUuid = crypto.randomUUID();
-      const unitPrice = Number.isInteger(product.price) ? product.price : Math.round((product.price || 0) * 100);
-      await pgdb.query('INSERT INTO cart_items (id, cart_id, product_id, sku, name, unit_price_cents, quantity, metadata) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [itemIdUuid, cartId, String(itemId), product.sku || null, product.name || null, unitPrice, quantity, null]);
-      return res.json({ success: true });
+    if (!cart) {
+      return res.status(404).json({ error: 'Cart not found' });
     }
 
-    // sqlite fallback
-    const legacy = require('../../db');
-    legacy.db.get('SELECT id, quantity FROM cart_items WHERE item_id = ?', [itemId], (err, existing) => {
-      if (err) return res.status(500).json({ error: 'DB error' });
-      if (existing) {
-        const newQty = existing.quantity + quantity;
-        if (newQty > product.stock) return res.status(409).json({ error: 'Insufficient stock for requested total quantity', actionable: `Max available: ${product.stock}` });
-        legacy.db.run('UPDATE cart_items SET quantity = ? WHERE id = ?', [newQty, existing.id], function (uerr) {
-          if (uerr) return res.status(500).json({ error: 'DB error' });
-          return res.json({ success: true });
-        });
-      } else {
-        legacy.db.run('INSERT INTO cart_items (item_id, quantity) VALUES (?, ?)', [itemId, quantity], function (ierr) {
-          if (ierr) return res.status(500).json({ error: 'DB error' });
-          return res.json({ success: true });
-        });
-      }
-    });
-  } catch (err) {
-    console.error('Error in cart POST:', err);
-    return res.status(500).json({ error: 'Failed to add item to cart' });
+    return res.status(200).json(cart);
+
+  } catch (error) {
+    console.error('Error fetching cart:', error);
+    return res.status(500).json({ error: 'Failed to fetch cart' });
   }
 });
+
+// POST /api/cart -> create or update cart
+router.post('/', async (req, res) => {
+  const { cart_id, user_id, items } = req.body;
+
+  // Validation
+  if (!user_id) {
+    return res.status(400).json({ error: 'user_id is required' });
+  }
+
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({
+      error: 'items array is required and must not be empty'
+    });
+  }
+
+  // Validate each item
+  for (const item of items) {
+    if (!item.product_id || !item.quantity || item.quantity < 1) {
+      return res.status(400).json({
+        error: 'Each item must have product_id and quantity >= 1'
+      });
+    }
+  }
+
+  try {
+    // Generate cart_id if not provided
+    const finalCartId = cart_id || crypto.randomUUID();
+
+    // Calculate total
+    const total_price_cents = items.reduce((sum, item) =>
+      sum + (item.unit_price_cents || 0) * item.quantity, 0
+    );
+
+    // Upsert to database
+    await upsertCart({
+      cart_id: finalCartId,
+      user_id,
+      items,
+      total_price_cents,
+      currency: req.body.currency || 'EUR'
+    });
+
+    // Fetch updated cart
+    const cart = await getCart(finalCartId);
+
+    // Publish cart snapshot to PubSub (non-blocking)
+    publishCartSnapshot(cart).catch(err =>
+      console.error('Failed to publish cart event:', err)
+    );
+
+    // Return cart snapshot
+    return res.status(200).json(cart);
+
+  } catch (error) {
+    console.error('Error upserting cart:', error);
+    return res.status(500).json({ error: 'Failed to save cart' });
+  }
+});
+
+// Helper function to publish cart events to PubSub
+async function publishCartSnapshot(cart) {
+  try {
+    const event = {
+      event_id: crypto.randomUUID(),
+      event_type: 'CART_UPDATED',
+      timestamp: new Date().toISOString(),
+      cart: {
+        cart_id: cart.cart_id,
+        user_id: cart.user_id,
+        items: cart.items,
+        total_price_cents: cart.total_price_cents,
+        currency: cart.currency
+      }
+    };
+
+    const topicName = process.env.PUBSUB_TOPIC_CART || 'cart-events';
+    const messageId = await publish(topicName, event);
+
+    console.log(`[cart] Published snapshot to ${topicName}: ${messageId}`);
+    return messageId;
+
+  } catch (error) {
+    console.error('[cart] Failed to publish snapshot:', error);
+    throw error;
+  }
+}
 
 // PUT /api/cart/:itemId -> update quantity
 router.put('/:itemId', async (req, res) => {

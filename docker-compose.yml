@@ -30,7 +30,7 @@ services:
       - "8085:8085"
       - "8081:8080"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8085/ || exit 1"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8085/ || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -84,16 +84,18 @@ services:
       - POSTGRES_USER=devuser
       - POSTGRES_PASSWORD=devpass
       - POSTGRES_DB=cartdb
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U devuser"]
+      test: [ "CMD-SHELL", "pg_isready -U devuser" ]
       interval: 10s
       timeout: 5s
       retries: 5
 
   # --- MICRO-FRONTEND SERVICES (Replaces old 'frontend') ---
-  
+
   host:
     container_name: mips_host
     build:
