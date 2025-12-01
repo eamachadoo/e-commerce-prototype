@@ -3,14 +3,8 @@ const router = express.Router();
 const crypto = require('crypto');
 const { upsertCart, getCart } = require('../db');
 const productService = require('../../productService');
-<<<<<<< HEAD
-const pgdb = require('../db');
-const { publish } = require('../../events/pubsubPublisher');
-
-=======
 const { pool: pgdb } = require('../db');
 const { publish, publishShoppingCart } = require('../events/pubsubPublisher');
->>>>>>> pubsub-publisher-pr6
 
 // GET /api/cart/:userId -> get specific cart by ID
 router.get('/:userId', async (req, res) => {
@@ -31,133 +25,6 @@ router.get('/:userId', async (req, res) => {
   }
 });
 
-<<<<<<< HEAD
-// GET /api/cart/:cart_id -> get specific cart by ID
-router.get('/:cart_id', async (req, res) => {
-  const { cart_id } = req.params;
-
-  try {
-    const cart = await getCart(cart_id);
-
-    if (!cart) {
-      return res.status(404).json({ error: 'Cart not found' });
-    }
-
-    return res.status(200).json(cart);
-
-  } catch (error) {
-    console.error('Error fetching cart:', error);
-    return res.status(500).json({ error: 'Failed to fetch cart' });
-  }
-});
-
-// POST /api/cart -> add item
-router.post('/', async (req, res) => {
-  const { cart_id, user_id, items } = req.body;
-
-  // Validation
-  if (!user_id) {
-    return res.status(400).json({ error: 'user_id is required' });
-  }
-
-  if (!items || !Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({
-      error: 'items array is required and must not be empty'
-    });
-  }
-
-  // Validate each item
-  for (const item of items) {
-    if (!item.product_id || !item.quantity || item.quantity < 1) {
-      return res.status(400).json({
-        error: 'Each item must have product_id and quantity >= 1'
-      });
-    }
-  }
-
-  try {
-    // Generate cart_id if not provided
-    const finalCartId = cart_id || crypto.randomUUID();
-
-    // Calculate total
-    const total_price_cents = items.reduce((sum, item) =>
-      sum + (item.unit_price_cents || 0) * item.quantity, 0
-    );
-
-    // Upsert to database using your new function
-    await upsertCart({
-      cart_id: finalCartId,
-      user_id,
-      items,
-      total_price_cents,
-      currency: req.body.currency || 'EUR'
-    });
-
-    // Fetch updated cart
-    const cart = await getCart(finalCartId);
-
-    // Publish cart snapshot to PubSub (non-blocking)
-    publishCartSnapshot(cart).catch(err =>
-      console.error('Failed to publish cart event:', err)
-    );
-
-    // Return cart snapshot
-    return res.status(200).json(cart);
-
-  } catch (error) {
-    console.error('Error upserting cart:', error);
-    return res.status(500).json({ error: 'Failed to save cart' });
-  }
-});
-
-// Helper function to publish cart events to PubSub
-async function publishCartSnapshot(cart) {
-  try {
-    const event = {
-      event_id: crypto.randomUUID(),
-      event_type: 'CART_UPDATED',
-      timestamp: new Date().toISOString(),
-      cart: {
-        cart_id: cart.cart_id,
-        user_id: cart.user_id,
-        items: cart.items,
-        total_price_cents: cart.total_price_cents,
-        currency: cart.currency
-      }
-    };
-
-    const topicName = process.env.PUBSUB_TOPIC_CART || 'cart-events';
-    const messageId = await publish(topicName, event);
-
-    console.log(`[cart] Published snapshot to ${topicName}: ${messageId}`);
-    return messageId;
-
-  } catch (error) {
-    console.error('[cart] Failed to publish snapshot:', error);
-    throw error;
-  }
-}
-
-// PUT /api/cart/:itemId -> update quantity
-router.put('/:itemId', async (req, res) => {
-  const itemId = req.params.itemId;
-  const { quantity } = req.body;
-  if (!Number.isInteger(quantity) || quantity < 0) return res.status(400).json({ error: 'Invalid quantity' });
-  if (quantity === 0) {
-    if (pgdb && pgdb.pool) {
-      const userId = DEFAULT_USER;
-      const cartRes = await pgdb.query('SELECT id FROM carts WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1', [userId]);
-      if (!cartRes.rows || cartRes.rows.length === 0) return res.json({ success: true });
-      const cartId = cartRes.rows[0].id;
-      await pgdb.query('DELETE FROM cart_items WHERE cart_id = $1 AND product_id = $2', [cartId, String(itemId)]);
-      return res.json({ success: true });
-    }
-    const legacy = require('../../db');
-    return legacy.db.run('DELETE FROM cart_items WHERE item_id = ?', [itemId], function (dErr) {
-      if (dErr) return res.status(500).json({ error: 'DB error' });
-      return res.json({ success: true });
-    });
-=======
 // POST /api/cart -> create or update cart
 router.post('/', async (req, res) => {
   const { userId, items } = req.body;
@@ -232,7 +99,6 @@ async function publishShoppingCartWrapper(cart) {
   } catch (error) {
     console.error('[cart] Failed to publish ShoppingCartWrapper:', error);
     throw error;
->>>>>>> pubsub-publisher-pr6
   }
 }
 

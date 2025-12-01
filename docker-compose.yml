@@ -16,70 +16,6 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/cartdb
     depends_on:
       - db
-<<<<<<< HEAD
-
-  pubsub-emulator:
-    image: dipjyotimetia/pubsub-emulator:latest
-    container_name: pubsub-emulator
-    environment:
-      - PUBSUB_PROJECT=test-project
-      - PUBSUB_TOPIC=orders,payments,notifications
-      - PUBSUB_SUBSCRIPTION=orders-sub,payments-sub,notifications-sub
-      - PUBSUB_PORT=8085
-      - DASHBOARD_PORT=8080
-    ports:
-      - "8085:8085"
-      - "8081:8080"
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8085/ || exit 1" ]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  orders-subscriber:
-    build: ./backend
-    container_name: orders_subscriber
-    command: sh -c "npm run start-subscriber"
-    environment:
-      - PUBSUB_PROJECT=test-project
-      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
-    volumes:
-      - ./backend:/usr/src/app
-      - backend_node_modules:/usr/src/app/node_modules
-    depends_on:
-      - pubsub-emulator
-    restart: on-failure
-
-  notifications-subscriber:
-    build: ./backend
-    container_name: notifications_subscriber
-    command: sh -c "npm run start-notifications-subscriber"
-    environment:
-      - PUBSUB_PROJECT=test-project
-      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
-    volumes:
-      - ./backend:/usr/src/app
-      - backend_node_modules:/usr/src/app/node_modules
-    depends_on:
-      - pubsub-emulator
-    restart: on-failure
-
-  inventory-subscriber:
-    build: ./backend
-    container_name: inventory_subscriber
-    command: sh -c "npm run start-inventory-subscriber"
-    environment:
-      - PUBSUB_PROJECT=test-project
-      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
-    volumes:
-      - ./backend:/usr/src/app
-      - backend_node_modules:/usr/src/app/node_modules
-    depends_on:
-      - pubsub-emulator
-    restart: on-failure
-
-=======
->>>>>>> pubsub-publisher-pr6
   db:
     image: postgres:15
     container_name: postgres_db
@@ -93,49 +29,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-<<<<<<< HEAD
-      test: [ "CMD-SHELL", "pg_isready -U devuser" ]
-=======
       test: [ "CMD-SHELL", "pg_isready -d cartdb -U postgres" ]
->>>>>>> pubsub-publisher-pr6
       interval: 10s
       timeout: 5s
       retries: 5
 
-<<<<<<< HEAD
-  # --- MICRO-FRONTEND SERVICES (Replaces old 'frontend') ---
-
-  host:
-    container_name: mips_host
-    build:
-      context: ./MIPS-Frontend-main/mips_host
-      dockerfile: Dockerfile
-    command: pnpm dev
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./MIPS-Frontend-main/mips_host:/app
-      - /app/node_modules
-    environment:
-      # Points to the backend API
-      - REACT_APP_BACKEND_URL=http://localhost:4000/api
-    depends_on:
-      - backend
-
-  product-page:
-    container_name: mips_product_page
-    build:
-      context: ./MIPS-Frontend-main/mips_product_page
-      dockerfile: Dockerfile
-    command: pnpm dev
-    ports:
-      - "3001:3001"
-    volumes:
-      - ./MIPS-Frontend-main/mips_product_page:/app
-      - /app/node_modules
-
-=======
->>>>>>> pubsub-publisher-pr6
   shopping-cart:
     container_name: mips_shopping_cart
     build:

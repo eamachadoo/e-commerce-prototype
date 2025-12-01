@@ -202,8 +202,6 @@ async function getCart(cart_id) {
 
 module.exports = { pool, query, migrate, upsertProductFromJumpseller, upsertCart, getCart };
 
-<<<<<<< HEAD
-=======
 /**
  * Upsert a cart (create or update)
  * @param {Object} cartData - Cart data
@@ -325,4 +323,3 @@ module.exports = {
   upsertCart,
   getCart
 };
->>>>>>> pubsub-publisher-pr6
