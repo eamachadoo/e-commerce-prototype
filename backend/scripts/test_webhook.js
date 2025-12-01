@@ -50,13 +50,13 @@ async function run() {
   // Wait for DB write
   await delay(200);
 
-  db.get('SELECT id, name, price, stock FROM items WHERE name = ?', [sample.product.title], (err, row) => {
+  db.get('SELECT id, name, price, stock FROM Item WHERE name = ?', [sample.product.title], (err, row) => {
     if (err) {
       console.error('DB error querying items:', err);
       process.exit(3);
     }
     if (!row) {
-      console.error('Test failed: product not found in items table');
+      console.error('Test failed: product not found in Item table');
       process.exit(4);
     }
     console.log('Found product in DB:', row);

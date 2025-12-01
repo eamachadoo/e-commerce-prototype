@@ -3,89 +3,15 @@ const router = express.Router();
 const crypto = require('crypto');
 const { upsertCart, getCart } = require('../db');
 const productService = require('../../productService');
-const pgdb = require('../db');
-const { publish, publishShoppingCart } = require('../../events/pubsubPublisher');
-// Helper: simple user scoping for demo (single user)
-const DEFAULT_USER = 'user1';
+const { pool: pgdb } = require('../db');
+const { publish, publishShoppingCart } = require('../events/pubsubPublisher');
 
-function cents(n) {
-  return Number(n) || 0;
-}
-
-// GET /api/cart -> summary
-router.get('/', async (req, res) => {
-  try {
-    if (pgdb && pgdb.pool) {
-      // Postgres path
-      const userId = DEFAULT_USER;
-      const cartRes = await pgdb.query('SELECT id, user_id, total_price_cents, currency FROM carts WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1', [userId]);
-      if (!cartRes.rows || cartRes.rows.length === 0) {
-        return res.json({ items: [], subtotal: 0, shipping: 0, discount: 0, total: 0 });
-      }
-      const cart = cartRes.rows[0];
-      const itemsRes = await pgdb.query('SELECT product_id, sku, name, unit_price_cents, quantity FROM cart_items WHERE cart_id = $1', [cart.id]);
-      const cartRows = itemsRes.rows || [];
-
-      // Fetch live product info for validation
-      let products = null;
-      try { products = await productService.getProducts(); } catch (e) { products = null; }
-      if (!products) return res.status(503).json({ error: 'Product service unavailable', actionable: 'Try again later' });
-
-      const missing = cartRows.map(r => r.product_id).filter(id => !products.some(p => String(p.id) === String(id)));
-      if (missing.length > 0) return res.status(400).json({ error: 'Some cart items are not available in product service', missing });
-
-      const items = cartRows.map(ci => {
-        const product = products.find(p => String(p.id) === String(ci.product_id));
-        const unit = ci.unit_price_cents || (product ? product.price : 0);
-        return {
-          id: ci.product_id,
-          name: ci.name || (product && product.name) || 'Unknown',
-          unitPrice: cents(unit),
-          quantity: ci.quantity,
-          lineTotal: cents(unit) * ci.quantity
-        };
-      });
-
-      const subtotal = items.reduce((s, it) => s + it.lineTotal, 0);
-      const shipping = subtotal > 5000 || subtotal === 0 ? 0 : 500;
-      const discount = subtotal >= 10000 ? Math.round(subtotal * 0.1) : 0;
-      const total = subtotal + shipping - discount;
-      return res.json({ items, subtotal, shipping, discount, total });
-    }
-
-    // Fallback: sqlite implementation (legacy db)
-    const legacy = require('../../db');
-    legacy.db.all('SELECT item_id, quantity FROM cart_items', async (err, cartRows) => {
-      if (err) return res.status(500).json({ error: 'DB error' });
-      if (!cartRows || cartRows.length === 0) return res.json({ items: [], subtotal: 0, shipping: 0, discount: 0, total: 0 });
-      let products = null;
-      try { products = await productService.getProducts(); } catch (e) { products = null; }
-      if (!products) return res.status(503).json({ error: 'Product service unavailable', actionable: 'Try again later' });
-      const missing = cartRows.map(r => r.item_id).filter(id => !products.some(p => p.id === id));
-      if (missing.length > 0) return res.status(400).json({ error: 'Some cart items are not available in product service', missing });
-      const items = cartRows.map(cartItem => {
-        const product = products.find(p => p.id === cartItem.item_id);
-        const unit = product ? product.price : 0;
-        return { id: product.id, name: product.name, unitPrice: unit, quantity: cartItem.quantity, lineTotal: unit * cartItem.quantity };
-      });
-      const subtotal = items.reduce((s, it) => s + it.lineTotal, 0);
-      const shipping = subtotal > 5000 || subtotal === 0 ? 0 : 500;
-      const discount = subtotal >= 10000 ? Math.round(subtotal * 0.1) : 0;
-      const total = subtotal + shipping - discount;
-      return res.json({ items, subtotal, shipping, discount, total });
-    });
-  } catch (err) {
-    console.error('Error in cart GET:', err);
-    return res.status(500).json({ error: 'Failed to fetch cart' });
-  }
-});
-
-// GET /api/cart/:cart_id -> get specific cart by ID
-router.get('/:cart_id', async (req, res) => {
-  const { cart_id } = req.params;
+// GET /api/cart/:userId -> get specific cart by ID
+router.get('/:userId', async (req, res) => {
+  const { userId } = req.params;
 
   try {
-    const cart = await getCart(cart_id);
+    const cart = await getCart(userId);
 
     if (!cart) {
       return res.status(404).json({ error: 'Cart not found' });
@@ -101,11 +27,11 @@ router.get('/:cart_id', async (req, res) => {
 
 // POST /api/cart -> create or update cart
 router.post('/', async (req, res) => {
-  const { cart_id, user_id, items } = req.body;
-
+  const { userId, items } = req.body;
+  
   // Validation
-  if (!user_id) {
-    return res.status(400).json({ error: 'user_id is required' });
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
   }
 
   if (!items || !Array.isArray(items) || items.length === 0) {
@@ -116,86 +42,23 @@ router.post('/', async (req, res) => {
 
   // Validate each item
   for (const item of items) {
-    if (!item.product_id || !item.quantity || item.quantity < 1) {
+    if (!item.itemId || !item.quantity || item.quantity < 1) {
       return res.status(400).json({
-        error: 'Each item must have product_id and quantity >= 1'
+        error: 'Each item must have itemId and quantity >= 1'
       });
     }
   }
 
-  // Validate products exist in product service
-  let products;
   try {
-    products = await productService.getProducts();
-  } catch (e) {
-    console.error('Error fetching products:', e);
-    products = null;
-  }
-
-  if (!products) {
-    return res.status(503).json({
-      error: 'Product service unavailable',
-      actionable: 'Try again later'
-    });
-  }
-
-  // Check if all products exist
-  const productIds = items.map(item => item.product_id);
-  const missing = productIds.filter(id =>
-    !products.some(p => String(p.id) === String(id))
-  );
-
-  if (missing.length > 0) {
-    return res.status(400).json({
-      error: 'Invalid products',
-      missing: missing,
-      actionable: 'Remove invalid products from cart'
-    });
-  }
-
-  // Validate stock availability
-  /*
-  const stockIssues = [];
-  for (const item of items) {
-    const product = products.find(p => String(p.id) === String(item.product_id));
-    if (product && item.quantity > product.stock) {
-      stockIssues.push({
-        product_id: item.product_id,
-        name: product.name,
-        requested: item.quantity,
-        available: product.stock,
-        actionable: `Reduce quantity to ${product.stock} or less`
-      });
-    }
-  }
-
-  if (stockIssues.length > 0) {
-    return res.status(409).json({
-      error: 'Insufficient stock',
-      details: stockIssues
-    });
-  }
-*/
-  try {
-    // Generate cart_id if not provided
-    const finalCartId = cart_id || crypto.randomUUID();
-
-    // Calculate total
-    const total_price_cents = items.reduce((sum, item) =>
-      sum + (item.unit_price_cents || 0) * item.quantity, 0
-    );
-
     // Upsert to database
     await upsertCart({
-      cart_id: finalCartId,
-      user_id,
+      userId,
       items,
-      total_price_cents,
       currency: req.body.currency || 'EUR'
     });
 
     // Fetch updated cart
-    const cart = await getCart(finalCartId);
+    const cart = await getCart(userId);
 
     // Publish cart snapshot to PubSub (non-blocking)
     publishShoppingCartWrapper(cart).catch(err =>
@@ -216,18 +79,17 @@ async function publishShoppingCartWrapper(cart) {
   try {
     // Format cart data to match ShoppingCartWrapper protobuf schema
     const wrapper = {
-      cart_id: cart.cart_id,
-      user_id: cart.user_id,
+      userId: cart.userId,
       items: cart.items.map(item => ({
-        product_id: item.product_id,
+        itemId: item.itemId,
         sku: item.sku || '',
         name: item.name || '',
-        unit_price_cents: parseInt(item.unit_price_cents) || 0,
+        priceCents: parseInt(item.priceCents) || 0,
         quantity: item.quantity || 0
       })),
-      total_price_cents: parseInt(cart.total_price_cents) || 0,
+      totalPriceCents: parseInt(cart.totalPriceCents) || 0,
       currency: cart.currency || 'EUR',
-      updated_at: cart.updated_at || new Date().toISOString()
+      updatedAt: cart.updatedAt || new Date().toISOString()
     };
 
     const messageId = await publishShoppingCart(wrapper);
@@ -240,72 +102,50 @@ async function publishShoppingCartWrapper(cart) {
   }
 }
 
-// PUT /api/cart/:itemId -> update quantity
-router.put('/:itemId', async (req, res) => {
-  const itemId = req.params.itemId;
-  const { quantity } = req.body;
-  if (!Number.isInteger(quantity) || quantity < 0) return res.status(400).json({ error: 'Invalid quantity' });
-  if (quantity === 0) {
-    if (pgdb && pgdb.pool) {
-      const userId = DEFAULT_USER;
-      const cartRes = await pgdb.query('SELECT id FROM carts WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1', [userId]);
-      if (!cartRes.rows || cartRes.rows.length === 0) return res.json({ success: true });
-      const cartId = cartRes.rows[0].id;
-      await pgdb.query('DELETE FROM cart_items WHERE cart_id = $1 AND product_id = $2', [cartId, String(itemId)]);
-      return res.json({ success: true });
-    }
-    const legacy = require('../../db');
-    return legacy.db.run('DELETE FROM cart_items WHERE item_id = ?', [itemId], function (dErr) {
-      if (dErr) return res.status(500).json({ error: 'DB error' });
-      return res.json({ success: true });
-    });
-  }
+
+// POST /api/cart/:userId -> add an item
+router.post('/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const { itemId, sku, name, priceCents, quantity, metadata } = req.body;
+  if (!Number.isInteger(quantity) || quantity < 1) return res.status(400).json({ error: 'Invalid quantity' });
 
   try {
-    let products;
-    try { products = await productService.getProducts(); } catch (e) { products = null; }
-    if (!products) return res.status(503).json({ error: 'Product service unavailable', actionable: 'Try again later' });
-    const product = products.find(p => String(p.id) === String(itemId));
-    if (!product) return res.status(404).json({ error: 'Item not found' });
-    if (quantity > product.stock) return res.status(409).json({ error: 'Insufficient stock', actionable: `Only ${product.stock} left in stock` });
-
-    if (pgdb && pgdb.pool) {
-      const userId = DEFAULT_USER;
-      const cartRes = await pgdb.query('SELECT id FROM carts WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1', [userId]);
-      if (!cartRes.rows || cartRes.rows.length === 0) return res.status(404).json({ error: 'Cart not found' });
-      const cartId = cartRes.rows[0].id;
-      await pgdb.query('UPDATE cart_items SET quantity = $1 WHERE cart_id = $2 AND product_id = $3', [quantity, cartId, String(itemId)]);
-      return res.json({ success: true });
-    }
-
-    const legacy = require('../../db');
-    legacy.db.run('UPDATE cart_items SET quantity = ? WHERE item_id = ?', [quantity, itemId], function (uerr) {
-      if (uerr) return res.status(500).json({ error: 'DB error' });
-      return res.json({ success: true });
-    });
+    await pgdb.query(`INSERT INTO CartItem (userId, itemId, sku, name, priceCents, quantity)
+                      VALUES ($1, $2, $3, $4, $5, $6)`,
+                      [userId, itemId, sku, name, priceCents, quantity]);
+    return res.json({ success: true });
   } catch (err) {
     console.error('Error in cart PUT:', err);
     return res.status(500).json({ error: 'Failed to update cart item' });
   }
 });
 
-// DELETE /api/cart/:itemId
-router.delete('/:itemId', async (req, res) => {
-  const itemId = req.params.itemId;
+// PUT /api/cart/:userId/:itemId -> update quantity
+router.put('/:userId/:itemId', async (req, res) => {
+  const { userId, itemId } = req.params;
+  const { quantity } = req.body;
+  if (!Number.isInteger(quantity) || quantity < 0) return res.status(400).json({ error: 'Invalid quantity' });
+  if (quantity === 0) {
+    const userId = itemId;
+    await pgdb.query('DELETE FROM CartItem WHERE userId = $1 AND itemId = $2', [userId, itemId]);
+    return res.json({ success: true });
+  }
+
   try {
-    if (pgdb && pgdb.pool) {
-      const userId = DEFAULT_USER;
-      const cartRes = await pgdb.query('SELECT id FROM carts WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1', [userId]);
-      if (!cartRes.rows || cartRes.rows.length === 0) return res.json({ success: true });
-      const cartId = cartRes.rows[0].id;
-      await pgdb.query('DELETE FROM cart_items WHERE cart_id = $1 AND product_id = $2', [cartId, String(itemId)]);
-      return res.json({ success: true });
-    }
-    const legacy = require('../../db');
-    legacy.db.run('DELETE FROM cart_items WHERE item_id = ?', [itemId], function (err) {
-      if (err) return res.status(500).json({ error: 'DB error' });
-      return res.json({ success: true });
-    });
+    await pgdb.query('UPDATE CartItem SET quantity = $1 WHERE userId = $2 AND itemId = $3', [quantity, userId, itemId]);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('Error in cart PUT:', err);
+    return res.status(500).json({ error: 'Failed to update cart item' });
+  }
+});
+
+// DELETE /api/cart/:userId/:itemId -> Delete an item
+router.delete('/:userId/:itemId', async (req, res) => {
+  const { userId, itemId } = req.params;
+  try {
+    await pgdb.query('DELETE FROM CartItem WHERE userId = $1 AND itemId = $2', [userId, itemId]);
+    return res.json({ success: true });
   } catch (err) {
     console.error('Error in cart DELETE:', err);
     return res.status(500).json({ error: 'Failed to remove cart item' });
@@ -314,7 +154,7 @@ router.delete('/:itemId', async (req, res) => {
 
 // POST /api/cart/checkout
 router.post('/checkout', async (req, res) => {
-  const { address, cart_id } = req.body;
+  const { address, cartId } = req.body;
 
   if (!address || !address.line1) {
     return res.status(400).json({
@@ -323,21 +163,21 @@ router.post('/checkout', async (req, res) => {
     });
   }
 
-  if (!cart_id) {
+  if (!cartId) {
     return res.status(400).json({
-      error: 'cart_id is required',
-      actionable: 'Provide a cart_id to checkout'
+      error: 'cartId is required',
+      actionable: 'Provide a cartId to checkout'
     });
   }
 
   try {
     // Get the full cart details
-    const cart = await getCart(cart_id);
+    const cart = await getCart(cartId);
 
     if (!cart) {
       return res.status(404).json({
         error: 'Cart not found',
-        actionable: 'Provide a valid cart_id'
+        actionable: 'Provide a valid cartId'
       });
     }
 
@@ -363,8 +203,8 @@ router.post('/checkout', async (req, res) => {
       });
     }
 
-    const missing = cart.items.map(item => item.product_id)
-      .filter(id => !products.some(p => String(p.id) === String(id)));
+    const missing = cart.items.map(item => item.itemId)
+      .filter(itemId => !products.some(p => p.id === itemId));
 
     if (missing.length > 0) {
       return res.status(400).json({
@@ -374,9 +214,9 @@ router.post('/checkout', async (req, res) => {
     }
 
     const cartWithProducts = cart.items.map(cartItem => {
-      const product = products.find(p => String(p.id) === String(cartItem.product_id));
+      const product = products.find(p => p.id === cartItem.itemId);
       return {
-        id: cartItem.product_id,
+        itemId: cartItem.itemId,
         quantity: cartItem.quantity,
         name: cartItem.name || (product ? product.name : 'Unknown Product'),
         stock: product ? product.stock : 0
@@ -402,13 +242,12 @@ router.post('/checkout', async (req, res) => {
   */
     // Publish CHECKOUT_ATTEMPT event
     const checkoutAttemptEvent = {
-      event_id: crypto.randomUUID(),
-      event_type: 'CHECKOUT_ATTEMPT',
+      eventId: crypto.randomUUID(),
+      eventType: 'CHECKOUT_ATTEMPT',
       timestamp: new Date().toISOString(),
-      cart_id: cart.cart_id,
-      user_id: cart.user_id,
+      userId: cart.userId,
       address: address,
-      total_price_cents: cart.total_price_cents,
+      totalPriceCents: cart.totalPriceCents,
       currency: cart.currency
     };
 
@@ -416,20 +255,19 @@ router.post('/checkout', async (req, res) => {
       console.error('[checkout] Failed to publish CHECKOUT_ATTEMPT:', err)
     );
 
-    console.log(`[checkout] Published CHECKOUT_ATTEMPT for cart ${cart.cart_id}`);
+    console.log(`[checkout] Published CHECKOUT_ATTEMPT for cart ${cart.cartId}`);
 
     const paymentSuccess = 1;
 
     if (paymentSuccess) {
       // Publish CHECKOUT_SUCCESS event
       const checkoutSuccessEvent = {
-        event_id: crypto.randomUUID(),
-        event_type: 'CHECKOUT_SUCCESS',
+        eventId: crypto.randomUUID(),
+        eventType: 'CHECKOUT_SUCCESS',
         timestamp: new Date().toISOString(),
-        cart_id: cart.cart_id,
-        user_id: cart.user_id,
-        order_id: crypto.randomUUID(),
-        total_price_cents: cart.total_price_cents,
+        userId: cart.userId,
+        orderId: crypto.randomUUID(),
+        totalPriceCents: cart.totalPriceCents,
         currency: cart.currency,
         address: address
       };
@@ -438,31 +276,31 @@ router.post('/checkout', async (req, res) => {
         console.error('[checkout] Failed to publish CHECKOUT_SUCCESS:', err)
       );
 
-      console.log(`[checkout] Published CHECKOUT_SUCCESS for cart ${cart.cart_id}`);
+      console.log(`[checkout] Published CHECKOUT_SUCCESS for cart ${cart.cartId}`);
 
       // Clear cart from database
       if (pgdb && pgdb.pool) {
-        await pgdb.query('DELETE FROM cart_items WHERE cart_id = $1', [cart_id]);
-        await pgdb.query('DELETE FROM carts WHERE id = $1', [cart_id]);
-        console.log(`[checkout] Cleared cart ${cart_id} from database`);
+        await pgdb.query('DELETE FROM CartItem WHERE cartId = $1', [cartId]);
+        await pgdb.query('DELETE FROM Cart WHERE userId = $1', [userId]);
+        console.log(`[checkout] Cleared cart ${cartId} from database`);
       }
 
       return res.json({
         success: true,
         message: 'Order confirmed',
-        order_id: checkoutSuccessEvent.order_id
+        orderId: checkoutSuccessEvent.orderId
       });
 
     } else {
       // Publish CHECKOUT_FAILED event
       const checkoutFailedEvent = {
-        event_id: crypto.randomUUID(),
-        event_type: 'CHECKOUT_FAILED',
+        eventId: crypto.randomUUID(),
+        eventType: 'CHECKOUT_FAILED',
         timestamp: new Date().toISOString(),
-        cart_id: cart.cart_id,
-        user_id: cart.user_id,
+        cartId: cart.cartId,
+        userId: cart.userId,
         reason: 'Payment gateway error',
-        total_price_cents: cart.total_price_cents,
+        totalPriceCents: cart.totalPriceCents,
         currency: cart.currency
       };
 
@@ -470,7 +308,7 @@ router.post('/checkout', async (req, res) => {
         console.error('[checkout] Failed to publish CHECKOUT_FAILED:', err)
       );
 
-      console.log(`[checkout] Published CHECKOUT_FAILED for cart ${cart.cart_id}`);
+      console.log(`[checkout] Published CHECKOUT_FAILED for cart ${cart.cartId}`);
 
       return res.status(402).json({
         success: false,
@@ -485,10 +323,10 @@ router.post('/checkout', async (req, res) => {
     // Publish CHECKOUT_FAILED event for unexpected errors
     try {
       const checkoutFailedEvent = {
-        event_id: crypto.randomUUID(),
-        event_type: 'CHECKOUT_FAILED',
+        eventId: crypto.randomUUID(),
+        eventType: 'CHECKOUT_FAILED',
         timestamp: new Date().toISOString(),
-        cart_id: cart_id,
+        cartId: cartId,
         reason: 'Internal server error',
         error: err.message
       };

@@ -4,8 +4,10 @@ const fs = require('fs');
 const path = require('path');
 
 // Create PostgreSQL connection pool
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  connectionTimeoutMillis: 5000, // 5s\
 });
 
 pool.on('connect', () => {
@@ -16,6 +18,9 @@ pool.on('error', (err) => {
   console.error('[db] Unexpected error on idle client', err);
   process.exit(-1);
 });
+
+// Initialize database when server starts
+initDb();
 
 /**
  * Query wrapper for easier use
@@ -29,12 +34,30 @@ async function query(text, params) {
 }
 
 /**
+ * Initialize Database
+ */
+async function initDb() {
+  console.log('[db] Running initialization...');
+
+  const createDbPath = path.join(__dirname, '../scripts/create.sql');
+  const sql = fs.readFileSync(createDbPath, 'utf8');
+
+  try {
+    await pool.query(sql);
+    console.log('[db] Initialization completed successfully');
+  } catch (error) {
+    console.error('[db] Initialization failed:', error);
+    throw error;
+  }
+}
+
+/**
  * Run database migrations
  */
 async function migrate() {
   console.log('[db] Running migrations...');
 
-  const migrationPath = path.join(__dirname, '../scripts/migrate.sql');
+  const migrationPath = path.join(__dirname, '../scripts/create.sql');
   const sql = fs.readFileSync(migrationPath, 'utf8');
 
   try {
@@ -46,18 +69,43 @@ async function migrate() {
   }
 }
 
+// Upsert a product payload from Jumpseller into the local `items` table.
+// Strategy: try to match by `external_id` (if present) or `name`. If not found, insert.
+async function upsertProductFromJumpseller(product) {
+  const { id: externalId, title: name, price, stock } = product;
+  // Normalize price: Jumpseller may send cents or float; expect cents integer or a number
+  const priceInt = Number.isInteger(price) ? price : Math.round((price || 0) * 100);
+
+  const res = await pool.query(
+    `INSERT INTO Item (name, price, stock, updatedAt)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (name)
+     DO UPDATE SET
+        price = EXCLUDED.price,
+        stock = EXCLUDED.stock,
+        updatedAt = NOW()
+     RETURNING id`,
+    [name, priceInt, stock || 0]
+  );
+
+   const wasInserted = res.command === 'INSERT';
+
+  return wasInserted
+    ? { inserted: true, id: res.rows[0].id }
+    : { updated: true, id: res.rows[0].id };
+}
+
 /**
  * Upsert a cart (create or update)
  * @param {Object} cartData - Cart data
- * @param {string} cartData.cart_id - Cart UUID
- * @param {string} cartData.user_id - User ID
+ * @param {string} cartData.userId - User ID
  * @param {Array} cartData.items - Array of cart items
- * @param {number} cartData.total_price_cents - Total price in cents
+ * @param {number} cartData.totalPriceCents - Total price in cents
  * @param {string} cartData.currency - Currency code (default: EUR)
- * @returns {Promise<string>} - Returns the cart_id
+ * @returns {Promise<string>} - Returns the cartId
  */
 async function upsertCart(cartData) {
-  const { cart_id, user_id, items, total_price_cents, currency = 'EUR' } = cartData;
+  const { userId, items, currency = 'EUR' } = cartData;
 
   const client = await pool.connect();
 
@@ -66,35 +114,35 @@ async function upsertCart(cartData) {
 
     // Upsert cart metadata
     await client.query(
-      `INSERT INTO carts (id, user_id, total_price_cents, currency, updated_at)
-       VALUES ($1, $2, $3, $4, NOW())
-       ON CONFLICT (id) 
+      `INSERT INTO Cart (userId, currency, updatedAt)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (userId) 
        DO UPDATE SET 
-         user_id = EXCLUDED.user_id,
-         total_price_cents = EXCLUDED.total_price_cents,
          currency = EXCLUDED.currency,
-         updated_at = NOW()`,
-      [cart_id, user_id, total_price_cents, currency]
+         updatedAt = NOW()`,
+      [userId, currency]
     );
 
     // Delete existing cart items
-    await client.query('DELETE FROM cart_items WHERE cart_id = $1', [cart_id]);
-
-    // Insert new cart items
+    await client.query('DELETE FROM CartItem WHERE userId = $1', [userId]);
+    
     for (const item of items) {
-      const crypto = require('crypto');
-      const itemId = crypto.randomUUID();
-
       await client.query(
-        `INSERT INTO cart_items (id, cart_id, product_id, name, quantity, unit_price_cents, sku, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        `INSERT INTO CartItem (userId, itemId, name, quantity, priceCents, sku, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (userId, itemId)
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           quantity = EXCLUDED.quantity,
+           priceCents = EXCLUDED.priceCents,
+           sku = EXCLUDED.sku,
+           metadata = EXCLUDED.metadata`,
         [
-          itemId,
-          cart_id,
-          item.product_id,
+          userId,
+          item.itemId,
           item.name || null,
           item.quantity,
-          item.unit_price_cents || 0,
+          item.priceCents || 0,
           item.sku || null,
           item.metadata ? JSON.stringify(item.metadata) : null
         ]
@@ -102,8 +150,8 @@ async function upsertCart(cartData) {
     }
 
     await client.query('COMMIT');
-    console.log(`[db] Cart upserted: ${cart_id}`);
-    return cart_id;
+    console.log(`[db] Cart upserted: ${userId}`);
+    return userId;
 
   } catch (error) {
     await client.query('ROLLBACK');
@@ -116,15 +164,15 @@ async function upsertCart(cartData) {
 
 /**
  * Get a cart by ID
- * @param {string} cart_id - Cart UUID
+ * @param {string} userId - Cart userId
  * @returns {Promise<Object|null>} - Cart object with items, or null if not found
  */
-async function getCart(cart_id) {
+async function getCart(userId) {
   try {
     // Get cart metadata
     const cartResult = await pool.query(
-      'SELECT id, user_id, total_price_cents, currency, updated_at FROM carts WHERE id = $1',
-      [cart_id]
+      'SELECT userId, totalPriceCents, currency, updatedAt FROM Cart WHERE userId = $1',
+      [userId]
     );
 
     if (cartResult.rows.length === 0) {
@@ -135,21 +183,20 @@ async function getCart(cart_id) {
 
     // Get cart items
     const itemsResult = await pool.query(
-      'SELECT product_id, sku, name, unit_price_cents, quantity, metadata FROM cart_items WHERE cart_id = $1',
-      [cart_id]
+      'SELECT itemId, sku, name, priceCents, quantity, metadata FROM CartItem WHERE userId = $1 ORDER BY createdAt, itemId',
+      [userId]
     );
 
     return {
-      cart_id: cart.id,
-      user_id: cart.user_id,
-      total_price_cents: cart.total_price_cents,
+      userId: cart.userid,
+      totalPriceCents: cart.totalpricecents,
       currency: cart.currency,
-      updated_at: cart.updated_at,
+      updatedAt: cart.updatedat,
       items: itemsResult.rows.map(item => ({
-        product_id: item.product_id,
+        itemId: item.itemid,
         sku: item.sku,
         name: item.name,
-        unit_price_cents: item.unit_price_cents,
+        priceCents: item.pricecents,
         quantity: item.quantity,
         metadata: item.metadata
       }))
@@ -164,6 +211,7 @@ async function getCart(cart_id) {
 module.exports = {
   pool,
   query,
+  initDb,
   migrate,
   upsertCart,
   getCart

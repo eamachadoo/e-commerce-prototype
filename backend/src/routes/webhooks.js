@@ -1,7 +1,7 @@
 const express = require('express');
 const { validateHmac } = require('../lib/hmac');
 const { upsertProductFromJumpseller } = require('../db');
-const { publish } = require('../../events/pubsubPublisher');
+const { publish } = require('../events/pubsubPublisher');
 
 const router = express.Router();
 
